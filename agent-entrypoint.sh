@@ -50,7 +50,11 @@ fi
 # Fix: use token-in-URL authentication exclusively; hide gh binary during git ops.
 # ============================================================
 
-export GITHUB_TOKEN="$GH_TOKEN"
+# Use PAT for all git/gh operations — NOT the Actions GITHUB_TOKEN.
+# GitHub does not trigger workflows on events caused by GITHUB_TOKEN (Actions token).
+# By using a PAT, commits and PR events will trigger CI/code-review workflows.
+unset GITHUB_TOKEN
+export GH_TOKEN="$GH_TOKEN"
 
 # Get user info via curl (NOT gh api — avoids triggering credential helper)
 GH_USER_JSON=$(curl -sf -H "Authorization: token ${GH_TOKEN}" https://api.github.com/user 2>/dev/null \
