@@ -133,7 +133,23 @@ PROMPT="
 
 # Your Job
 
-$(cat "${JOB_FILE}")"
+$(cat "${JOB_FILE}")
+
+---
+
+## Instructions
+
+Read the task above carefully and complete it by:
+
+1. Writing all output to files in the repository (e.g. source code, documents, content — whatever the task requires)
+2. Do NOT just reply with text — you MUST create or edit files with your output
+3. Place output files in a logical location within the repo (e.g. \`src/\`, \`docs/\`, project root)
+4. After writing files, verify they exist with the correct content
+5. The entrypoint script will commit and push your changes automatically — focus on creating the files
+
+If the task is to write content (song, document, spec), write it to a \`.md\` file.
+If the task is to write code, write it to the appropriate source files.
+Do NOT skip writing files — files are the only deliverable that gets committed."
 
 # Determine model flags — OpenRouter is the default provider
 MODEL_FLAGS=""
