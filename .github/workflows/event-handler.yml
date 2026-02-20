@@ -1,0 +1,110 @@
+name: Event Handler
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'event_handler/**'
+      - '.github/workflows/event-handler.yml'
+
+concurrency:
+  group: event-handler
+  cancel-in-progress: true
+
+jobs:
+  run:
+    name: Run masterbot event handler
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      actions: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        working-directory: event_handler
+        run: npm ci
+
+      - name: Start Cloudflare Tunnel
+        run: |
+          curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb -o cloudflared.deb
+          sudo dpkg -i cloudflared.deb
+
+          cloudflared tunnel --url http://localhost:3000 --no-autoupdate > /tmp/cloudflared.log 2>&1 &
+
+          echo "Waiting for Cloudflare Tunnel URL..."
+          for i in $(seq 1 30); do
+            FUNNEL_URL=$(grep -oE 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' /tmp/cloudflared.log | head -1)
+            if [ -n "$FUNNEL_URL" ]; then
+              break
+            fi
+            sleep 2
+          done
+
+          if [ -z "$FUNNEL_URL" ]; then
+            echo "Failed to get Cloudflare Tunnel URL"
+            cat /tmp/cloudflared.log
+            exit 1
+          fi
+
+          echo "Tunnel URL: $FUNNEL_URL"
+          echo "FUNNEL_URL=$FUNNEL_URL" >> $GITHUB_ENV
+
+      - name: Update GH_WEBHOOK_URL variable
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          gh variable set GH_WEBHOOK_URL --body "$FUNNEL_URL" --repo ${{ github.repository }}
+
+      - name: Write .env file
+        working-directory: event_handler
+        run: |
+          echo '${{ secrets.EVENT_HANDLER_ENV }}' | base64 -d > .env
+
+      - name: Run event handler
+        working-directory: event_handler
+        run: |
+          node server.js &
+          SERVER_PID=$!
+
+          trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
+
+          sleep 5
+
+          # Register Telegram webhook if bot token is configured
+          if grep -q "^TELEGRAM_BOT_TOKEN=[^[:space:]]" .env 2>/dev/null; then
+            BOT_TOKEN=$(grep "^TELEGRAM_BOT_TOKEN=" .env | cut -d= -f2-)
+            TG_WEBHOOK_SECRET=$(grep "^TELEGRAM_WEBHOOK_SECRET=" .env | cut -d= -f2-)
+            WEBHOOK_URL="${FUNNEL_URL}/telegram/webhook"
+
+            echo "Registering Telegram webhook: $WEBHOOK_URL"
+
+            # Delete existing webhook first
+            curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/deleteWebhook" > /dev/null
+
+            # Set new webhook with secret
+            RESULT=$(curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/setWebhook" \
+              -H "Content-Type: application/json" \
+              -d "{\"url\": \"${WEBHOOK_URL}\", \"secret_token\": \"${TG_WEBHOOK_SECRET}\"}")
+
+            echo "Telegram webhook registration: $RESULT"
+          else
+            echo "No TELEGRAM_BOT_TOKEN configured, skipping webhook registration"
+          fi
+
+          # Run for ~5h 45m then stop (GitHub Actions 6h limit)
+          sleep 20700 || true
+
+      - name: Re-trigger workflow
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          gh workflow run event-handler.yml --repo ${{ github.repository }}

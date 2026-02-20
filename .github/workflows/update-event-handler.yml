@@ -1,0 +1,101 @@
+name: Notify Event Handler
+
+on:
+  pull_request:
+    types: [opened, synchronize, closed]
+    branches:
+      - '*-dev'
+
+jobs:
+  notify:
+    name: Send job results to event handler
+    runs-on: ubuntu-latest
+    if: startsWith(github.head_ref, 'feat/')
+    permissions:
+      contents: read
+      pull-requests: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 10
+
+      - name: Gather job results
+        id: results
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BRANCH="${{ github.head_ref }}"
+          FEAT_ID="${BRANCH#feat/}"
+
+          # Get commit message
+          COMMIT_MSG=$(git log -1 --pretty=%B 2>/dev/null | head -5 || echo "")
+
+          # Get changed files
+          CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null | head -20 | tr '\n' ',' | sed 's/,$//' || echo "")
+
+          # Read job.md if it exists
+          JOB_MD=""
+          if [ -f "logs/${FEAT_ID}/job.md" ]; then
+            JOB_MD=$(cat "logs/${FEAT_ID}/job.md" | head -50)
+          fi
+
+          # PR state
+          PR_STATE="${{ github.event.pull_request.state }}"
+          MERGED="${{ github.event.pull_request.merged }}"
+          if [ "$MERGED" = "true" ]; then
+            PR_STATUS="merged"
+          else
+            PR_STATUS="$PR_STATE"
+          fi
+
+          echo "feat_id=${FEAT_ID}" >> "$GITHUB_OUTPUT"
+          echo "commit_msg=${COMMIT_MSG}" >> "$GITHUB_OUTPUT"
+          echo "changed_files=${CHANGED}" >> "$GITHUB_OUTPUT"
+          echo "pr_status=${PR_STATUS}" >> "$GITHUB_OUTPUT"
+
+          # Write job.md to a temp file for multiline handling
+          echo "$JOB_MD" > /tmp/job_md.txt
+
+      - name: Send to event handler
+        env:
+          GH_WEBHOOK_URL: ${{ vars.GH_WEBHOOK_URL }}
+          GH_WEBHOOK_SECRET: ${{ secrets.GH_WEBHOOK_SECRET }}
+        run: |
+          if [ -z "$GH_WEBHOOK_URL" ]; then
+            echo "GH_WEBHOOK_URL not configured — skipping notification"
+            exit 0
+          fi
+
+          FEAT_ID="${{ steps.results.outputs.feat_id }}"
+          JOB_MD=$(cat /tmp/job_md.txt 2>/dev/null || echo "")
+
+          PAYLOAD=$(jq -n \
+            --arg feat_id    "$FEAT_ID" \
+            --arg task       "$JOB_MD" \
+            --arg commit_msg "${{ steps.results.outputs.commit_msg }}" \
+            --arg changed    "${{ steps.results.outputs.changed_files }}" \
+            --arg pr_status  "${{ steps.results.outputs.pr_status }}" \
+            --arg pr_url     "${{ github.event.pull_request.html_url }}" \
+            '{
+              pull_request: {
+                head: { ref: ("feat/" + $feat_id) },
+                html_url: $pr_url
+              },
+              job_results: {
+                task:          $task,
+                commit_message: $commit_msg,
+                changed_files: ($changed | split(",") | map(select(. != ""))),
+                pr_status:     $pr_status,
+                pr_url:        $pr_url
+              }
+            }')
+
+          curl -sf \
+            -X POST "${GH_WEBHOOK_URL}/github/webhook" \
+            -H "Content-Type: application/json" \
+            -H "x-github-event: pull_request" \
+            -H "x-github-webhook-secret-token: ${GH_WEBHOOK_SECRET}" \
+            -d "$PAYLOAD" \
+            || echo "Event handler notification failed (non-fatal)"

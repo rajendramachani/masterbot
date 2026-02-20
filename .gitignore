@@ -1,3 +1,8 @@
 node_modules/
 .env
 *.log
+tmp/
+logs/*/
+!logs/.gitkeep
+event_handler/node_modules/
+event_handler/.env

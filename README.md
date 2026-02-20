@@ -1,287 +1,349 @@
-# gitops-service
+# masterbot
 
-A standalone Express service that manages a **single GitHub repo with multiple projects**. Each project gets its own branch hierarchy. External services push code via HTTP; the service creates feature branches, opens PRs, and triggers per-project CI + AI code review + auto-merge.
-
-## Branch model
-
-```
-main                        ← gitops-service code only (never touched by pushes)
-├── proj-a-master           ← auto-bootstrapped on first push for proj-a
-│   └── proj-a-dev          ← integration branch (PR target)
-│       └── feat/<name|uuid>  ← created per push, PR → proj-a-dev
-├── proj-b-master
-│   └── proj-b-dev
-│       └── feat/<name|uuid>
-```
-
-On first push for a project, the service automatically:
-1. Creates `{project}-master` from `main`
-2. Commits `.github/workflows/` + `.github/scripts/review.js` onto `{project}-master`
-3. Creates `{project}-dev` from `{project}-master`
-
-## Flow
-
-```
-POST /push/sync
-  │
-  ├─ ensureProject(project)
-  │    ├─ create {project}-master (from main, if new)
-  │    ├─ bootstrap .github/workflows/ + .github/scripts/ (idempotent)
-  │    └─ create {project}-dev (from {project}-master, if new)
-  │
-  ├─ create feat/<name|uuid> from {project}-dev
-  ├─ push files from dir/
-  └─ open PR → {project}-dev
-       │
-       GitHub Actions on {project}-master:
-       ├─ CI (ci.yml)
-       ├─ Code Review Agent (code-review.yml → .github/scripts/review.js)
-       └─ Auto-merge or human-review-required label (feat-auto-merge.yml)
-```
-
-## API
-
-**Auth:** `x-api-key` header required on all routes except `GET /ping`.
+**Autonomous AI coding agent. Talk to it on Telegram. It builds your code on GitHub.**
 
 ---
 
-### `GET /ping`
-Health check. Returns service metadata and queue stats.
+## How It Works
 
-```json
-{
-  "ok": true,
-  "version": "1.0.0",
-  "node": "v20.x.x",
-  "uptime_s": 3600,
-  "queue": { "active": 0, "queued": 0, "concurrency": 5 }
-}
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                                                                         │
+│  You (Telegram)                                                         │
+│       │                                                                 │
+│       │ 1. Describe a task                                              │
+│       ▼                                                                 │
+│  ┌─────────────────┐                                                    │
+│  │  Event Handler  │ ──2──► LLM (OpenRouter) generates plan            │
+│  │  (Telegram bot) │ ──3──► Sends plan to you for approval             │
+│  └────────▲────────┘                                                    │
+│           │                                                             │
+│           │ 4. You approve                                              │
+│           │                                                             │
+│           ▼                                                             │
+│  ┌─────────────────┐                                                    │
+│  │     GitHub      │ ── Creates feat/<id> branch + job.md              │
+│  │  (feat branch)  │                                                    │
+│  └────────┬────────┘                                                    │
+│           │                                                             │
+│           │ 5. run-job.yml triggers                                     │
+│           ▼                                                             │
+│  ┌─────────────────┐                                                    │
+│  │  Pi Coding      │ ── Reads job.md, implements code, commits         │
+│  │  Agent (Docker) │                                                    │
+│  └────────┬────────┘                                                    │
+│           │                                                             │
+│           │ 6. PR opened to {project}-dev                              │
+│           ▼                                                             │
+│  ┌─────────────────┐                                                    │
+│  │  Code Review    │ ── AI reviews the PR (OpenRouter)                 │
+│  │  Agent          │                                                    │
+│  └────────┬────────┘                                                    │
+│           │                                                             │
+│           │ 7. Auto-merge (if approved)                                │
+│           ▼                                                             │
+│  ┌─────────────────┐                                                    │
+│  │  Telegram       │ ── You get notified with PR link + summary        │
+│  │  Notification   │                                                    │
+│  └─────────────────┘                                                    │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-### `POST /push` — async (202)
-Fire-and-forget. Returns immediately; work happens in background.
-Returns **503** if the queue is full (depth ≥ `PUSH_QUEUE_MAX_DEPTH`).
+## Branch Model
 
-### `POST /push/sync` — synchronous
-Waits for branch + PR creation and returns the full result.
-Returns **503** if the queue is full (depth ≥ `PUSH_QUEUE_MAX_DEPTH`).
+Each project gets its own isolated branch hierarchy:
 
-**Body:**
-```json
-{
-  "project": "proj-a",
-  "dir": "/mnt/incoming/proj-a/output",
-  "description": "Add authentication module",
-  "feat_name": "add-auth",
-  "labels": ["backend"],
-  "source": "my-external-service"
-}
+```
+main                         ← masterbot code (never touched by agent jobs)
+├── {project}-master         ← project root (workflows, scripts bootstrapped here)
+│   └── {project}-dev        ← integration branch (PR target for all feat branches)
+│       └── feat/<id>        ← agent working branch (one per task)
 ```
 
-| Field | Required | Description |
-|---|---|---|
-| `project` | ✅ | Project identifier — letters, numbers, hyphens, underscores |
-| `dir` | ✅ | Absolute path to directory **inside `INCOMING_DIR`** (path traversal protection enforced). Contents pushed recursively; `.git/` and `node_modules/` skipped |
-| `description` | — | PR title and body description |
-| `feat_name` | — | Branch suffix: `feat/<feat_name>`. Defaults to UUID if omitted. Re-pushing with the same name updates files on the existing branch |
-| `labels` | — | Extra PR labels. `automated` and `{project}` are always added |
-| `source` | — | Identifier of the calling service (shown in PR body) |
-
-**Response (`/push/sync`):**
-```json
-{
-  "feat_id": "add-auth",
-  "branch": "feat/add-auth",
-  "project": "proj-a",
-  "dev_branch": "proj-a-dev",
-  "pr_number": 5,
-  "pr_url": "https://github.com/owner/repo/pull/5"
-}
-```
+The Pi coding agent works on `feat/<id>`, commits its code, and opens a PR to `{project}-dev`.
+The code review agent reviews it. If approved, `feat-auto-merge.yml` squash-merges it.
 
 ---
 
-### `POST /projects/:project/bootstrap`
-Explicitly (re-)bootstrap a project's branch hierarchy and workflow files. Use this to:
-- Pre-create a project before the first push
-- Re-apply updated workflow templates to an existing project
-- Recover from a partial bootstrap
+## Get Started
 
+### Prerequisites
+
+| Requirement | Notes |
+|-------------|-------|
+| **GitHub account** | Free tier works |
+| **Telegram bot** | Create via [@BotFather](https://t.me/BotFather) |
+| **OpenRouter API key** | [openrouter.ai](https://openrouter.ai) — free tier available |
+| **GitHub PAT** | Scopes: `repo`, `workflow` |
+
+### Step 1 — Fork this repository
+
+[![Fork this repo](https://img.shields.io/badge/Fork_this_repo-238636?style=for-the-badge&logo=github&logoColor=white)](https://github.com/rajendramachani/masterbot/fork)
+
+> Enable GitHub Actions on your fork: go to the **Actions** tab and click "I understand my workflows, go ahead and enable them."
+
+### Step 2 — Set GitHub Secrets
+
+Go to **Settings → Secrets and variables → Actions → Secrets** and add:
+
+| Secret | Value |
+|--------|-------|
+| `SECRETS` | Base64-encoded JSON: `{"GH_TOKEN":"ghp_...","ANTHROPIC_API_KEY":"..."}` |
+| `LLM_SECRETS` | Base64-encoded JSON: `{"OPENROUTER_API_KEY":"sk-or-v1-..."}` |
+| `GH_WEBHOOK_SECRET` | Random string (generate: `openssl rand -hex 32`) |
+| `GH_PAT` | GitHub PAT with `repo` + `workflow` scopes |
+| `EVENT_HANDLER_ENV` | Base64-encoded `.env` file (see below) |
+| `OPENROUTER_API_KEY` | Your OpenRouter key (for code review agent) |
+
+To create `SECRETS`:
 ```bash
-curl -X POST http://localhost:3000/projects/proj-a/bootstrap \
-  -H "x-api-key: <API_KEY>"
+echo '{"GH_TOKEN":"ghp_your_token","ANTHROPIC_API_KEY":"sk-ant-..."}' | base64 -w0
 ```
 
-**Response:**
-```json
-{
-  "ok": true,
-  "project": "proj-a",
-  "master_branch": "proj-a-master",
-  "dev_branch": "proj-a-dev"
-}
+To create `LLM_SECRETS`:
+```bash
+echo '{"OPENROUTER_API_KEY":"sk-or-v1-your_key"}' | base64 -w0
 ```
+
+To create `EVENT_HANDLER_ENV`:
+```bash
+# Fill in event_handler/.env.example → save as event_handler/.env
+cat event_handler/.env | base64 -w0
+```
+
+### Step 3 — Set GitHub Variables
+
+Go to **Settings → Secrets and variables → Actions → Variables** and add:
+
+| Variable | Value | Required |
+|----------|-------|----------|
+| `GH_WEBHOOK_URL` | Set automatically by `event-handler.yml` | Auto |
+| `AUTO_MERGE` | Set to `false` to disable auto-merge | No |
+| `AGENT_IMAGE_URL` | Custom Docker image URL (e.g. `ghcr.io/you/masterbot-agent`) | No |
+| `AGENT_MODEL` | Override model for Pi agent (e.g. `openai/gpt-4o`) | No |
+| `REVIEW_MODEL` | Override model for code review (e.g. `openai/gpt-4o-mini`) | No |
+
+### Step 4 — Configure the Event Handler `.env`
+
+Copy `event_handler/.env.example` to `event_handler/.env` and fill in:
+
+```env
+API_KEY=your_random_api_key
+GH_TOKEN=ghp_your_token
+GH_OWNER=your_github_username
+GH_REPO=masterbot
+
+TELEGRAM_BOT_TOKEN=your_bot_token
+TELEGRAM_WEBHOOK_SECRET=your_webhook_secret
+TELEGRAM_VERIFICATION=verify-abc12345
+TELEGRAM_CHAT_ID=         # fill in after step 5
+
+GH_WEBHOOK_SECRET=your_webhook_secret
+OPENROUTER_API_KEY=sk-or-v1-your_key
+```
+
+### Step 5 — Get Your Telegram Chat ID
+
+1. Start a chat with your bot on Telegram
+2. Send your `TELEGRAM_VERIFICATION` code (e.g. `verify-abc12345`)
+3. The bot replies with your chat ID
+4. Add it to `TELEGRAM_CHAT_ID` in your `.env`
+5. Re-encode and update `EVENT_HANDLER_ENV` secret
+
+### Step 6 — Start the Event Handler
+
+Trigger the `Event Handler` workflow manually from the **Actions** tab.
+
+It will:
+- Start the event handler server
+- Create a Cloudflare Tunnel for the public URL
+- Register your Telegram webhook automatically
+- Run for ~6 hours then auto-restart
+
+### Step 7 — Build the Agent Docker Image
+
+Trigger the `Build Agent Docker Image` workflow from the **Actions** tab.
+
+This builds and pushes the Pi coding agent image to GHCR.
 
 ---
 
-## GitHub Actions Workflows
+## Using masterbot
 
-Workflows are bootstrapped onto `{project}-master` and trigger on PRs from `feat/*` branches.
+### Sending a Task
+
+Message your Telegram bot with a task description:
+
+```
+Build a REST API for a todo list with Node.js and Express. 
+Include endpoints for CRUD operations and store data in a JSON file.
+```
+
+masterbot will reply with a plan:
+
+```
+Here's my plan:
+
+Project: todo-api
+Feature: rest-api-crud
+Estimated time: ~15 minutes
+
+Steps:
+1. Create Express server with todo routes
+2. Implement GET /todos, POST /todos, PUT /todos/:id, DELETE /todos/:id
+3. Add JSON file persistence layer
+4. Write basic error handling
+
+I'll build a Node.js REST API for todo management with full CRUD operations 
+and JSON file storage.
+
+Reply "yes" to approve and start, "no" to cancel, or describe any changes.
+```
+
+### Approving a Plan
+
+Reply with any of: `yes`, `approve`, `go`, `ok`, `proceed`, `confirm`, `start`, `lgtm`
+
+masterbot creates the branch and starts the Pi coding agent.
+
+### Modifying a Plan
+
+Reply with feedback instead of approving:
+
+```
+Use SQLite instead of JSON file, and add pagination to GET /todos
+```
+
+masterbot re-plans with your feedback.
+
+### Cancelling
+
+Reply with: `no`, `cancel`, `abort`, `stop`
+
+---
+
+## Architecture
+
+### Components
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| **Event Handler** | `event_handler/` | Telegram bot, plan/approval flow, job creation |
+| **Pi Coding Agent** | `Dockerfile.agent` + `agent-entrypoint.sh` | Autonomous code implementation |
+| **GitOps Service** | `src/` | Branch management, PR creation, queue |
+| **Code Review Agent** | `agents/code-review/` | AI PR review via OpenRouter |
+| **Operating System** | `operating_system/` | Agent personality, prompts, cron/trigger configs |
+
+### GitHub Actions Workflows
 
 | Workflow | Trigger | Purpose |
-|---|---|---|
-| `ci.yml` | PR opened/updated | Runs project tests |
-| `code-review.yml` | After CI completes (`conclusion == 'success'`) | LLM reviews diff via `.github/scripts/review.js`, posts comment. LLM and GitHub API calls have configurable timeouts. |
-| `feat-auto-merge.yml` | After code review completes (`conclusion == 'success'`) | Squash-merges if all gates pass, else labels PR |
-| `issue-to-branch.yml` | Issue labeled with `gitops-push` | Parses issue form body, calls `POST /push/sync`, comments PR link back on the issue |
+|----------|---------|---------|
+| `event-handler.yml` | Push to `main` or manual | Runs event handler via Cloudflare Tunnel (auto-restarts) |
+| `run-job.yml` | `feat/*` branch created | Runs Pi coding agent Docker container |
+| `docker-build-agent.yml` | Push to `main` (agent files) | Builds and pushes agent Docker image to GHCR |
+| `ci.yml` | Push to `feat/*` | Runs CI checks |
+| `code-review.yml` | After CI completes | AI code review on feat branch PRs |
+| `feat-auto-merge.yml` | After code review | Auto-merges approved PRs to `{project}-dev` |
+| `update-event-handler.yml` | PR opened/closed on `*-dev` | Sends job results to event handler → Telegram notification |
+| `issue-to-branch.yml` | Issue labeled `gitops-push` | Alternative: create feat branch from GitHub issue |
 
-All workflows use **concurrency groups** to cancel duplicate runs for the same branch or issue. All jobs have `timeout-minutes` set to prevent silent runner-minute drain.
+### LLM Providers
 
-### Auto-merge gates (all must pass)
-1. Code Review workflow concluded with `success` (not errored/cancelled)
-2. All CI checks green (no `failure`, `cancelled`, or `timed_out` conclusions)
-3. No `human-review-required` label on the PR
-4. `AUTO_MERGE` repo variable is not `false`
-5. PR is `MERGEABLE` (no conflicts)
+masterbot uses **OpenRouter** as the default LLM provider, giving you access to:
+- `openai/gpt-4o` — best quality
+- `openai/gpt-4o-mini` — fast and cheap (default)
+- `anthropic/claude-3.5-sonnet` — excellent for code
+- `google/gemini-flash-1.5` — very fast
+- Any other model on OpenRouter
 
-### Issue-to-branch workflow
-
-Add the `gitops-push` label to any issue whose body follows this form structure:
-
-```
-### Project
-proj-a
-
-### Feature Name
-add-auth
-
-### Source Directory
-/mnt/incoming/proj-a/output
-
-### Description
-Add authentication module
-
-### Extra Labels (optional)
-backend, security
-```
-
-The workflow parses the body, calls `POST /push/sync` on your gitops-service instance, and comments the resulting PR link back on the issue.
-
-**Required repo secrets/variables for this workflow:**
-
-| Name | Type | Description |
-|---|---|---|
-| `GITOPS_URL` | Variable | Base URL of your gitops-service, e.g. `http://my-server:3000` |
-| `GITOPS_API_KEY` | Secret | The `API_KEY` value from your gitops-service `.env` |
-
-### Per-project workflow customisation
-
-```
-projects/
-├── _default/
-│   └── workflows/          ← used for all projects unless overridden
-│       ├── ci.yml
-│       ├── code-review.yml
-│       └── feat-auto-merge.yml
-└── example-project/
-    └── workflows/          ← overrides _default for 'example-project' only
-        └── ci.yml          ← e.g. Python/pytest instead of Node
-```
-
-To customise a project's CI: add `projects/<project>/workflows/ci.yml` to `main`, then call `POST /projects/<project>/bootstrap` to push the updated workflows.
-
-## Setup
-
-### Quick install (one command)
-
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/01rmachani/gitops-service/main/install.sh)
-```
-
-This script:
-- Clones the repo (or pulls latest if the directory already exists)
-- Creates `.env` from `.env.example` and opens it for editing
-- Runs `docker compose up -d --build`
-- Polls `/ping` until the service is healthy and prints next steps
-
-> **Requires:** `git`, `docker` (with Compose v2)
+Set `EVENT_HANDLER_MODEL` in your `.env` to change the chat/planning model.
+Set `AGENT_MODEL` GitHub variable to change the Pi agent model.
+Set `REVIEW_MODEL` GitHub variable to change the code review model.
 
 ---
 
-### Manual setup
+## Customization
 
-### 1. Clone and install
-```bash
-git clone https://github.com/01rmachani/gitops-service
-cd gitops-service
-cp .env.example .env
-# Fill in .env
-```
+### Agent Personality
 
-### 2. GitHub repo secrets and variables
+Edit `operating_system/SOUL.md` to change the agent's personality and working style.
 
-**Secrets** (Settings → Secrets → Actions):
-- `OPENROUTER_API_KEY` — OpenRouter API key for the code review agent
-- `GITOPS_API_KEY` — API key for `issue-to-branch.yml` to call your gitops-service instance
+### Agent Instructions
 
-**Variables** (Settings → Variables → Actions):
-- `AUTO_MERGE` — set to `false` to disable auto-merge globally (default: enabled)
-- `REVIEW_MODEL` — LLM model override (default: `anthropic/claude-3.5-haiku`)
-- `GITOPS_URL` — base URL of your gitops-service instance (required for `issue-to-branch.yml`)
+Edit `operating_system/AGENT.md` to change the agent's environment description and rules.
 
-### 3. Create labels
-```bash
-gh label create "automated"              --color "0075ca" --repo owner/repo
-gh label create "human-review-required" --color "e4e669" --repo owner/repo
-gh label create "gitops-push"            --color "5319e7" --repo owner/repo
-```
+### Chat Behavior
 
-The `gitops-push` label is required to trigger the `issue-to-branch.yml` workflow.
+Edit `operating_system/CHATBOT.md` to change how the Telegram bot responds to messages.
 
-### 4. Run with Docker (recommended)
-```bash
-cp .env.example .env  # fill in values
-docker compose up -d --build
-```
+### Job Summary Format
 
-### 5. Run without Docker
-```bash
-npm start        # production
-npm run dev      # development (nodemon)
-```
+Edit `operating_system/JOB_SUMMARY.md` to change how completed jobs are summarized.
 
-## Dependabot
+### Scheduled Jobs
 
-A `.github/dependabot.yml` is included and runs weekly PRs for:
-- **npm** — keeps Node.js dependencies up to date
-- **github-actions** — keeps action versions pinned to latest
-
-No configuration required; it activates automatically once the file is present in the default branch.
-
-## Observability
-
-All HTTP requests are logged as structured JSON with a unique `x-request-id` correlation ID:
-
+Add entries to `operating_system/CRONS.json`:
 ```json
-{"reqId":"uuid","method":"POST","path":"/push/sync","ip":"...","event":"request"}
-{"reqId":"uuid","method":"POST","path":"/push/sync","ip":"...","event":"response","status":200,"ms":312}
+[
+  {
+    "schedule": "0 9 * * 1",
+    "job": "weekly-report",
+    "description": "Weekly status report every Monday at 9am"
+  }
+]
 ```
 
-Callers can pass their own `x-request-id` header and it will be echoed back in the response for end-to-end tracing.
+### Per-Project Workflows
 
-## Environment Variables
+Add project-specific workflow files to `projects/{project-name}/workflows/`.
+If not present, `projects/_default/workflows/` is used.
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `API_KEY` | ✅ | — | Auth key for external callers (`x-api-key` header) |
-| `GH_TOKEN` | ✅ | — | GitHub PAT — needs `Contents: read/write`, `Pull requests: read/write`, `Workflows: read/write` |
-| `GH_OWNER` | ✅ | — | GitHub org or username |
-| `GH_REPO` | ✅ | — | Target repository name |
-| `PUSH_QUEUE_CONCURRENCY` | — | `5` | Max parallel push operations |
-| `PUSH_QUEUE_MAX_DEPTH` | — | `50` | Max queued requests waiting for a slot — returns 503 if exceeded |
-| `PORT` | — | `3000` | Server port |
-| `INCOMING_DIR` | — | `/mnt/incoming` | Allowed root for `dir` values. Any `dir` outside this path is rejected (path traversal protection) |
-| `GH_API_TIMEOUT_MS` | — | `30000` | Timeout in ms for GitHub API calls (service + code-review agent) |
-| `LLM_TIMEOUT_MS` | — | `120000` | Timeout in ms for OpenRouter LLM calls in the code-review agent |
+---
+
+## API Reference
+
+The event handler exposes these endpoints (all except webhooks require `x-api-key` header):
+
+| Endpoint | Method | Auth | Purpose |
+|----------|--------|------|---------|
+| `/ping` | GET | Yes | Health check |
+| `/webhook` | POST | Yes | Create a job directly (bypasses Telegram) |
+| `/jobs/status` | GET | Yes | Check job status by `job_id` |
+| `/telegram/register` | POST | Yes | Register Telegram webhook URL |
+| `/telegram/webhook` | POST | Secret | Receive Telegram updates |
+| `/github/webhook` | POST | Secret | Receive job completion notifications |
+
+Create a job via API:
+```bash
+curl -X POST https://your-tunnel-url/webhook \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: YOUR_API_KEY" \
+  -d '{"task": "Add a dark mode toggle to the frontend", "project": "my-app", "feat_name": "dark-mode"}'
+```
+
+---
+
+## Security
+
+- **Secrets are never exposed to the LLM**: `SECRETS` are decoded at the shell level and filtered before the Pi agent's subprocess starts
+- **LLM-accessible secrets**: Put API keys the agent needs (e.g. for calling external APIs) in `LLM_SECRETS`
+- **Telegram security**: Bot only responds to your configured `TELEGRAM_CHAT_ID`
+- **Webhook secrets**: Both Telegram and GitHub webhooks are validated with secrets
+- **Path traversal protection**: The GitOps service validates all directory paths
+
+---
+
+## Docs
+
+| Document | Description |
+|----------|-------------|
+| `operating_system/SOUL.md` | Agent personality |
+| `operating_system/AGENT.md` | Agent environment and rules |
+| `operating_system/CHATBOT.md` | Telegram chat system prompt |
+| `operating_system/JOB_SUMMARY.md` | Job completion summary prompt |
+| `event_handler/.env.example` | All environment variables |
+| `projects/_default/` | Default project bootstrap files |
+| `agents/code-review/` | Code review agent |
