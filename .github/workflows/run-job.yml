@@ -30,10 +30,19 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Checkout repository
+      - name: Checkout main (for agent-entrypoint.sh)
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.branch }}
+          ref: main
+
+      - name: Fetch job.md from feat branch
+        run: |
+          BRANCH="${{ inputs.branch }}"
+          FEAT_ID="${BRANCH#feat/}"
+          git fetch origin "${BRANCH}"
+          mkdir -p "logs/${FEAT_ID}"
+          git show "origin/${BRANCH}:logs/${FEAT_ID}/job.md" > "logs/${FEAT_ID}/job.md" 2>/dev/null \
+            || echo "job.md not found on branch — agent will handle"
 
       - name: Run masterbot Agent
         env:
