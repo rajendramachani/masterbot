@@ -1,13 +1,19 @@
 name: Run masterbot Agent
 
 on:
-  create:
+  push:
+    branches:
+      - 'feat/**'
+
+concurrency:
+  group: run-agent-${{ github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
   run-agent:
     name: Run Pi coding agent on feat branch
     runs-on: ubuntu-latest
-    if: github.ref_type == 'branch' && startsWith(github.ref_name, 'feat/')
+    if: startsWith(github.ref_name, 'feat/')
     permissions:
       contents: write
       packages: read
