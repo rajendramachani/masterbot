@@ -151,6 +151,7 @@ app.post('/telegram/webhook', async (req, res) => {
  *   7. Non-task messages → LLM chat response
  */
 async function handleTelegramMessage(chatId, text) {
+  console.log(`[handler] chatId=${chatId} text=${JSON.stringify(text)}`);
   const trimmed = text.trim();
   const lower = trimmed.toLowerCase();
 
@@ -217,15 +218,25 @@ async function handleTelegramMessage(chatId, text) {
   }
 
   // --- Detect if this is a task request or a chat message ---
+  console.log('[handler] classifying intent...');
   const isTaskRequest = await classifyIntent(trimmed, getHistory(chatId));
+  console.log(`[handler] isTaskRequest=${isTaskRequest}`);
 
   if (isTaskRequest) {
     await sendMessage(telegramBotToken, chatId, 'Let me plan that for you...');
     await planAndPresent(chatId, trimmed);
   } else {
     // Regular chat — LLM response
+    console.log('[handler] generating chat response...');
     const history = getHistory(chatId);
-    const response = await generateChatResponse(trimmed, history);
+    let response;
+    try {
+      response = await generateChatResponse(trimmed, history);
+      console.log('[handler] chat response generated, length:', response?.length);
+    } catch (err) {
+      console.error('[handler] generateChatResponse error:', err.message);
+      throw err;
+    }
 
     const newHistory = [
       ...history,
@@ -234,7 +245,9 @@ async function handleTelegramMessage(chatId, text) {
     ];
     updateHistory(chatId, newHistory);
 
+    console.log('[handler] sending chat response to Telegram...');
     await sendMessage(telegramBotToken, chatId, response);
+    console.log('[handler] done.');
   }
 }
 

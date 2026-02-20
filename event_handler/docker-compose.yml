@@ -6,8 +6,7 @@ services:
     image: masterbot-event-handler:latest
     container_name: masterbot
     restart: unless-stopped
-    ports:
-      - "63001:63001"
+    network_mode: host
     env_file:
       - .env
     volumes:
