@@ -10,13 +10,14 @@ const { ensureProject } = require('./github/ensure-project');
 const { enqueue, stats } = require('./queue/push-queue');
 
 const { version: PKG_VERSION } = require('../package.json');
+const helloRoute = require('./hello');
 const STARTED_AT = Date.now();
 const PROJECT_RE = /^[a-zA-Z0-9_-]+$/;
 
 // Fail fast — catch misconfiguration before accepting any traffic
 const REQUIRED_ENV = ['API_KEY', 'GH_TOKEN', 'GH_OWNER', 'GH_REPO'];
 for (const key of REQUIRED_ENV) {
-  if (!process.env[key]) {
+  if (process.env.NODE_ENV !== 'development' && !process.env[key]) {
     console.error(`[startup] Missing required env var: ${key}`);
     process.exit(1);
   }
@@ -67,6 +68,9 @@ app.get('/ping', (req, res) => {
     queue: stats(),
   });
 });
+
+// Register Hello World route
+helloRoute(app);
 
 // All routes below require x-api-key auth
 app.use(auth);
