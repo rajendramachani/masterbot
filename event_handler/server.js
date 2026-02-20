@@ -181,9 +181,8 @@ async function handleTelegramMessage(chatId, text) {
           ``,
           `Project: ${result.project}`,
           `Branch: ${result.branch}`,
-          `PR: ${result.pr_url}`,
           ``,
-          `The Pi coding agent is now running. I'll notify you when it's done.`,
+          `The Pi coding agent is now running. It will commit code and open a PR when done. I'll notify you!`,
         ].join('\n');
 
         await sendMessage(telegramBotToken, chatId, msg);

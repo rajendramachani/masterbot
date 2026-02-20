@@ -32,7 +32,7 @@ jobs:
           if [ -n "$AGENT_IMAGE_URL" ]; then
             IMAGE="${AGENT_IMAGE_URL}:latest"
           else
-            IMAGE="ghcr.io/${{ github.repository_owner }}/masterbot-agent:latest"
+            IMAGE="stephengpope/thepopebot:latest"
           fi
           echo "Using image: $IMAGE"
           chmod +x agent-entrypoint.sh
