@@ -7,13 +7,13 @@ services:
     container_name: masterbot
     restart: unless-stopped
     ports:
-      - "3001:3001"
+      - "63001:63001"
     env_file:
       - .env
     volumes:
       - ../operating_system:/app/operating_system:ro
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3001/ping || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:63001/ping || exit 1"]
       interval: 30s
       timeout: 5s
       start_period: 10s
