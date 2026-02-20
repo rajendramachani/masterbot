@@ -135,44 +135,28 @@ async function createJobBranch({ project, task, feat_name }) {
 }
 
 /**
- * Ensure project-master (orphan) and project-dev branches exist.
+ * Ensure project-master and project-dev branches exist.
+ * Both are forked from main so they inherit .github/workflows/ —
+ * this is required for CI/code-review to trigger on pull_request events.
  */
 async function ensureProjectBranches(repo, project, masterBranch, devBranch) {
-  // Check if project-master exists
-  let masterExists = false;
+  // Get main branch SHA as the base for both branches
+  const mainRef = await githubApi(`${repo}/git/ref/heads/main`);
+  const mainSha = mainRef.object.sha;
+
+  // Ensure project-master exists (fork from main)
   try {
     await githubApi(`${repo}/git/ref/heads/${masterBranch}`);
-    masterExists = true;
   } catch (err) {
     if (err.status !== 404) throw err;
-  }
-
-  if (!masterExists) {
-    // Create orphan project-master with a placeholder commit
-    const blob = await githubApi(`${repo}/git/blobs`, {
-      method: 'POST',
-      body: JSON.stringify({ content: `# ${project}\n\nProject branch managed by masterbot.\n`, encoding: 'utf-8' }),
-    });
-    const tree = await githubApi(`${repo}/git/trees`, {
-      method: 'POST',
-      body: JSON.stringify({ tree: [{ path: 'README.md', mode: '100644', type: 'blob', sha: blob.sha }] }),
-    });
-    const commit = await githubApi(`${repo}/git/commits`, {
-      method: 'POST',
-      body: JSON.stringify({
-        message: `chore(gitops): bootstrap ${masterBranch}`,
-        tree: tree.sha,
-        parents: [],
-      }),
-    });
     try {
       await githubApi(`${repo}/git/refs`, {
         method: 'POST',
-        body: JSON.stringify({ ref: `refs/heads/${masterBranch}`, sha: commit.sha }),
+        body: JSON.stringify({ ref: `refs/heads/${masterBranch}`, sha: mainSha }),
       });
-      console.log(`[github] Created orphan branch: ${masterBranch}`);
-    } catch (err) {
-      if (err.status !== 422) throw err;
+      console.log(`[github] Created branch: ${masterBranch} (from main)`);
+    } catch (createErr) {
+      if (createErr.status !== 422) throw createErr;
     }
   }
 
@@ -187,7 +171,7 @@ async function ensureProjectBranches(repo, project, masterBranch, devBranch) {
         method: 'POST',
         body: JSON.stringify({ ref: `refs/heads/${devBranch}`, sha: masterRef.object.sha }),
       });
-      console.log(`[github] Created branch: ${devBranch}`);
+      console.log(`[github] Created branch: ${devBranch} (from ${masterBranch})`);
     } catch (createErr) {
       if (createErr.status !== 422) throw createErr;
     }
