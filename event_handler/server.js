@@ -222,8 +222,11 @@ async function handleTelegramMessage(chatId, text) {
   console.log(`[handler] isTaskRequest=${isTaskRequest}`);
 
   if (isTaskRequest) {
+    console.log('[handler] sending planning message...');
     await sendMessage(telegramBotToken, chatId, 'Let me plan that for you...');
+    console.log('[handler] calling planAndPresent...');
     await planAndPresent(chatId, trimmed);
+    console.log('[handler] planAndPresent done.');
   } else {
     // Regular chat — LLM response
     console.log('[handler] generating chat response...');
