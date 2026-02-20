@@ -1,19 +1,22 @@
 name: Run masterbot Agent
 
 on:
-  push:
-    branches:
-      - 'feat/**'
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'feat/* branch to run the agent on'
+        required: true
+        type: string
 
 concurrency:
-  group: run-agent-${{ github.ref_name }}
+  group: run-agent-${{ inputs.branch }}
   cancel-in-progress: false
 
 jobs:
   run-agent:
     name: Run Pi coding agent on feat branch
     runs-on: ubuntu-latest
-    if: startsWith(github.ref_name, 'feat/')
+    if: startsWith(inputs.branch, 'feat/')
     permissions:
       contents: write
       packages: read
@@ -29,6 +32,8 @@ jobs:
 
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
 
       - name: Run masterbot Agent
         env:
@@ -45,7 +50,7 @@ jobs:
           docker run --rm \
             -v "${{ github.workspace }}/agent-entrypoint.sh:/entrypoint.sh" \
             -e REPO_URL="${{ github.server_url }}/${{ github.repository }}.git" \
-            -e BRANCH="${{ github.ref_name }}" \
+            -e BRANCH="${{ inputs.branch }}" \
             -e SECRETS='${{ secrets.SECRETS }}' \
             -e LLM_SECRETS='${{ secrets.LLM_SECRETS }}' \
             -e MODEL="${MODEL}" \

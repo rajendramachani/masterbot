@@ -108,6 +108,20 @@ async function createJobBranch({ project, task, feat_name }) {
     body: JSON.stringify(fileBody),
   });
 
+  // Dispatch run-job.yml workflow to run the Pi coding agent on the feat branch
+  try {
+    await githubApi(`${repo}/actions/workflows/run-job.yml/dispatches`, {
+      method: 'POST',
+      body: JSON.stringify({
+        ref: 'main',
+        inputs: { branch },
+      }),
+    });
+    console.log(`[github] Dispatched run-job.yml for branch: ${branch}`);
+  } catch (err) {
+    console.warn(`[github] workflow dispatch failed: ${err.message}`);
+  }
+
   // PR is opened by the agent after it commits generated code — not here.
   const repoUrl = `https://github.com/${GH_OWNER}/${GH_REPO}`;
   return {
