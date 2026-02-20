@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Masterbot Overview</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@3.0.0/dist/tailwind.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-100 font-sans leading-normal tracking-normal">
+    <header class="bg-blue-500 p-4">
+        <h1 class="text-white text-3xl">masterbot</h1>
+        <p class="text-blue-200">Autonomous AI coding agent. Talk to it on Telegram. It builds your code on GitHub.</p>
+    </header>
+    <main class="p-4">
+        <section class="mb-8">
+            <h2 class="text-2xl text-blue-700 mb-2">How It Works</h2>
+            <pre class="bg-white p-4 rounded shadow">
+                <code>
+┌─────────────────────────────────────────────────────────────────────────┐
+│                                                                         │
+│  You (Telegram)                                                         │
+│       │                                                                 │
+│       │ 1. Describe a task                                              │
+│       ▼                                                                 │
+│  ┌─────────────────┐                                                    │
+│  │  Event Handler  │ ──2──► LLM (OpenRouter) generates plan            │
+│  │  (Telegram bot) │ ──3──► Sends plan to you for approval             │
+│  └────────▲────────┘                                                    │
+│           │                                                             │
+│           │ 4. You approve                                              │
+│           │                                                             │
+│           ▼                                                             │
+│  ┌─────────────────┐                                                    │
+│  │     GitHub      │ ── Creates feat/<id> branch + job.md              │
+│  │  (feat branch)  │                                                    │
+│  └────────┬────────┘                                                    │
+│           │                                                             │
+│           │ 5. run-job.yml triggers                                     │
+│           ▼                                                             │
+│  ┌─────────────────┐                                                    │
+│  │  Pi Coding      │ ── Reads job.md, implements code, commits         │
+│  │  Agent (Docker) │                                                    │
+│  └────────┬────────┘                                                    │
+│           │                                                             │
+│           │ 6. PR opened to {project}-dev                              │
+│           ▼                                                             │
+│  ┌─────────────────┐                                                    │
+│  │  Code Review    │ ── AI reviews the PR (OpenRouter)                 │
+│  │  Agent          │                                                    │
+│  └────────┬────────┘                                                    │
+│           │                                                             │
+│           │ 7. Auto-merge (if approved)                                │
+│           ▼                                                             │
+│  ┌─────────────────┐                                                    │
+│  │  Telegram       │ ── You get notified with PR link + summary        │
+│  │  Notification   │                                                    │
+│  └─────────────────┘                                                    │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+                </code>
+            </pre>
+        </section>
+
+        <section class="mb-8">
+            <h2 class="text-2xl text-blue-700 mb-2">Branch Model</h2>
+            <pre class="bg-white p-4 rounded shadow">
+                <code>
+main                         ← masterbot code (never touched by agent jobs)
+├── {project}-master         ← project root (workflows, scripts bootstrapped here)
+│   └── {project}-dev        ← integration branch (PR target for all feat branches)
+│       └── feat/<id>        ← agent working branch (one per task)
+                </code>
+            </pre>
+            <p>
+                The Pi coding agent works on <code>feat/&lt;id&gt;</code>, commits its code, and opens a PR to <code>{project}-dev</code>. The code review agent reviews it. If approved, <code>feat-auto-merge.yml</code> squash-merges it.
+            </p>
+        </section>
+        
+        <section class="mb-8">
+            <h2 class="text-2xl text-blue-700 mb-2">Get Started</h2>
+            <ol class="list-decimal list-inside">
+                <li>Fork this repository and enable GitHub Actions.</li>
+                <li>Set GitHub Secrets and Variables as per instructions.</li>
+                <li>Configure the Event Handler <code>.env</code> file.</li>
+                <li>Start the Event Handler using the provided workflow.</li>
+                <li>Build the Agent Docker Image via the respective workflow.</li>
+            </ol>
+        </section>
+    </main>
+    <footer class="bg-blue-500 p-4 text-white text-center">
+        &copy; 2026 masterbot - All Rights Reserved
+    </footer>
+</body>
+</html>
