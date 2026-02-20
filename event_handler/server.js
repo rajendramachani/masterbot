@@ -174,6 +174,7 @@ async function handleTelegramMessage(chatId, text) {
           project: plan.project,
           task: plan.task,
           feat_name: plan.feat_name,
+          plan,
         });
 
         const msg = [

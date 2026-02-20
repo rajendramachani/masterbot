@@ -51,7 +51,7 @@ async function githubApi(endpoint, options = {}) {
  * @param {string} opts.feat_name  - Feature branch suffix (slugified task title)
  * @returns {Promise<{feat_id, branch, project, dev_branch, pr_number, pr_url}>}
  */
-async function createJobBranch({ project, task, feat_name }) {
+async function createJobBranch({ project, task, feat_name, plan }) {
   const repo = `/repos/${GH_OWNER}/${GH_REPO}`;
   const masterBranch = `${project}-master`;
   const devBranch = `${project}-dev`;
@@ -82,13 +82,28 @@ async function createJobBranch({ project, task, feat_name }) {
   }
 
   // Write structured job.md onto the feat branch (includes project metadata for the agent)
-  const jobMd = [
+  const jobMdParts = [
     `<!-- masterbot-meta project="${project}" dev_branch="${devBranch}" feat_id="${featId}" -->`,
     ``,
     `# Task`,
     ``,
     task,
-  ].join('\n');
+  ];
+
+  if (plan) {
+    if (plan.steps && plan.steps.length) {
+      jobMdParts.push(``, `## Plan`, ``);
+      plan.steps.forEach((s, i) => jobMdParts.push(`${i + 1}. ${s}`));
+    }
+    if (plan.summary) {
+      jobMdParts.push(``, `## Summary`, ``, plan.summary);
+    }
+    if (plan.estimated_minutes) {
+      jobMdParts.push(``, `**Estimated time:** ~${plan.estimated_minutes} minutes`);
+    }
+  }
+
+  const jobMd = jobMdParts.join('\n');
   const jobContent = Buffer.from(jobMd).toString('base64');
   let existingSha;
   try {
