@@ -3,4 +3,4 @@
 # Task
 
 task:
-write a song with an opening and two verses to reflect today's AI adoption all over the world.
+write a song with an opening and two verses to reflect todays AI adoption all over the world.
